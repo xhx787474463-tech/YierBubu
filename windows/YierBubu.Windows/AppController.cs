@@ -19,7 +19,7 @@ public sealed class AppController:IDisposable
     private bool hidden,sessionActive=true,disposed,lastResting;
     private double animationUntil,lastBlink;
     private readonly Queue<(double Time,InputEvent Input)> demo=[];
-    private readonly Forms.ToolStripMenuItem visibility=new("隐藏小熊"),clickThrough=new("鼠标穿透"){CheckOnClick=true};
+    private readonly Forms.ToolStripMenuItem visibility=new("隐藏小熊"),clickThrough=new("鼠标穿透"){CheckOnClick=true},autoStart=new("开机自启动"){CheckOnClick=true};
     public static double Now=>Stopwatch.GetTimestamp()/(double)Stopwatch.Frequency;
     public AppController(Application app,Assets assets)
     {
@@ -31,12 +31,21 @@ public sealed class AppController:IDisposable
         clickThrough.Click+=(_,_)=>window.SetClickThrough(clickThrough.Checked);menu.Items.Add(clickThrough);
         var size=new Forms.ToolStripMenuItem("小熊大小");
         foreach(int percent in new[]{75,100,125}){var item=new Forms.ToolStripMenuItem(percent+"%"){Checked=percent==100};item.Click+=(_,_)=>{window.SetScale(percent/100.0);foreach(Forms.ToolStripMenuItem other in size.DropDownItems)other.Checked=other==item;};size.DropDownItems.Add(item);}menu.Items.Add(size);
+        autoStart.Checked=AutoStartEnabled;autoStart.Click+=(_,_)=>SetAutoStart(autoStart.Checked);menu.Items.Add(autoStart);
         Add(menu,"恢复到屏幕右下角",()=>window.ResetPosition());Add(menu,"动作演示",StartDemo);menu.Items.Add(new Forms.ToolStripSeparator());
         Add(menu,"连接状态与真实计数…",ShowStatus);Add(menu,"重新连接",()=>{input.Start();UpdateStatus();});menu.Items.Add(new Forms.ToolStripSeparator());Add(menu,"退出一二布布",()=>app.Shutdown());
         tray.ContextMenuStrip=menu;tray.DoubleClick+=(_,_)=>ShowStatus();
         input.Input+=OnInput;input.Reset+=ResetActions;frames.Tick+=(_,_)=>Tick();heartbeat.Tick+=(_,_)=>IdleTick();blinkEnd.Tick+=(_,_)=>{blinkEnd.Stop();view.SetBlinking(false);};
     }
     private static void Add(Forms.ContextMenuStrip menu,string title,Action action){var item=new Forms.ToolStripMenuItem(title);item.Click+=(_,_)=>action();menu.Items.Add(item);}
+    private const string RunKey=@"Software\Microsoft\Windows\CurrentVersion\Run",RunValue="YierBubu";
+    private static bool AutoStartEnabled{get{using var key=Registry.CurrentUser.OpenSubKey(RunKey);return key?.GetValue(RunValue) is string value&&value.Trim('"').Equals(Environment.ProcessPath,StringComparison.OrdinalIgnoreCase);}}
+    private static void SetAutoStart(bool enabled)
+    {
+        using var key=Registry.CurrentUser.CreateSubKey(RunKey);
+        if(enabled)key.SetValue(RunValue,$"\"{Environment.ProcessPath}\"");
+        else if(key.GetValue(RunValue)!=null)key.DeleteValue(RunValue);
+    }
     public void Start()
     {
         window.Show();tray.Visible=true;input.Start();lastBlink=Now;heartbeat.Start();
