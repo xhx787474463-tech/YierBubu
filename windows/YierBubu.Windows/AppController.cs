@@ -15,8 +15,10 @@ public sealed class AppController:IDisposable
     private readonly System.Drawing.Icon icon;
     private readonly DispatcherTimer frames=new(){Interval=TimeSpan.FromSeconds(1.0/60)},heartbeat=new(){Interval=TimeSpan.FromSeconds(1)},blinkEnd=new(){Interval=TimeSpan.FromSeconds(0.12)};
     private readonly InteractionState state=new(Now);
+    private readonly TypingStats typingStats;
+    private readonly AppSettings settings;
     private StatusWindow? status;
-    private bool hidden,sessionActive=true,disposed,lastResting;
+    private bool hidden,sessionActive=true,disposed,lastResting,settingsDirty;
     private double animationUntil,lastBlink;
     private readonly Queue<(double Time,InputEvent Input)> demo=[];
     private readonly Forms.ToolStripMenuItem visibility=new("隐藏小熊"),clickThrough=new("鼠标穿透"){CheckOnClick=true},autoStart=new("开机自启动"){CheckOnClick=true};
@@ -24,38 +26,59 @@ public sealed class AppController:IDisposable
     public AppController(Application app,Assets assets)
     {
         this.app=app;view=new(assets);window=new(view);
+        settings=AppSettings.Load();
+        typingStats=new TypingStats(Path.Combine(AppSettings.Root,"typing-stats.json"));
+        typingStats.Prune(DateOnly.FromDateTime(DateTime.Now).AddDays(-370));
         icon=new System.Drawing.Icon(Path.Combine(assets.Root,"YierBubu.ico"));
         tray=new Forms.NotifyIcon{Icon=icon,Text="一二布布 · 桌面陪伴",Visible=false};
         var menu=new Forms.ContextMenuStrip();menu.Items.Add(new Forms.ToolStripMenuItem("一二布布 · 陪你敲键盘"){Enabled=false});
         visibility.Click+=(_,_)=>ToggleVisibility();menu.Items.Add(visibility);
-        clickThrough.Click+=(_,_)=>window.SetClickThrough(clickThrough.Checked);menu.Items.Add(clickThrough);
+        clickThrough.Click+=(_,_)=>{window.SetClickThrough(clickThrough.Checked);CommitSettings();};menu.Items.Add(clickThrough);
         var size=new Forms.ToolStripMenuItem("小熊大小");
-        foreach(int percent in new[]{75,100,125}){var item=new Forms.ToolStripMenuItem(percent+"%"){Checked=percent==100};item.Click+=(_,_)=>{window.SetScale(percent/100.0);foreach(Forms.ToolStripMenuItem other in size.DropDownItems)other.Checked=other==item;};size.DropDownItems.Add(item);}menu.Items.Add(size);
-        autoStart.Checked=AutoStartEnabled;autoStart.Click+=(_,_)=>SetAutoStart(autoStart.Checked);menu.Items.Add(autoStart);
+        foreach(int percent in new[]{75,100,125}){var item=new Forms.ToolStripMenuItem(percent+"%"){Tag=percent};item.Click+=(_,_)=>{window.SetScale(percent/100.0);foreach(Forms.ToolStripMenuItem other in size.DropDownItems)other.Checked=other==item;};size.DropDownItems.Add(item);}menu.Items.Add(size);
+        autoStart.Click+=(_,_)=>SetAutoStart(autoStart.Checked);menu.Items.Add(autoStart);
         Add(menu,"恢复到屏幕右下角",()=>window.ResetPosition());Add(menu,"动作演示",StartDemo);menu.Items.Add(new Forms.ToolStripSeparator());
         Add(menu,"连接状态与真实计数…",ShowStatus);Add(menu,"重新连接",()=>{input.Start();UpdateStatus();});menu.Items.Add(new Forms.ToolStripSeparator());Add(menu,"退出一二布布",()=>app.Shutdown());
+        // Tray checkbox states are refreshed every time the menu opens so they never show stale values.
+        menu.Opening+=(_,_)=>{
+            autoStart.Checked=AutoStartEnabled;clickThrough.Checked=window.ClickThrough;visibility.Text=hidden?"显示小熊":"隐藏小熊";
+            foreach(Forms.ToolStripMenuItem item in size.DropDownItems)if(item.Tag is int percent)item.Checked=Math.Abs(window.Scale*100-percent)<0.5;
+        };
         tray.ContextMenuStrip=menu;tray.DoubleClick+=(_,_)=>ShowStatus();
+        window.ScaleCommitted+=CommitSettings;window.LocationChanged+=(_,_)=>settingsDirty=true;
+        window.SetScale(Math.Clamp(settings.Scale,PetWindow.MinScale,PetWindow.MaxScale));
+        if(settings.ClickThrough){clickThrough.Checked=true;window.SetClickThrough(true);}
+        if(settings.Left is {} left&&settings.Top is {} top)window.RestorePosition(left,top);
+        // If the exe was moved, silently repoint the existing Run entry instead of losing autostart.
+        if(AutoStartRegistered&&!AutoStartEnabled)SetAutoStart(true);
         input.Input+=OnInput;input.Reset+=ResetActions;frames.Tick+=(_,_)=>Tick();heartbeat.Tick+=(_,_)=>IdleTick();blinkEnd.Tick+=(_,_)=>{blinkEnd.Stop();view.SetBlinking(false);};
     }
     private static void Add(Forms.ContextMenuStrip menu,string title,Action action){var item=new Forms.ToolStripMenuItem(title);item.Click+=(_,_)=>action();menu.Items.Add(item);}
     private const string RunKey=@"Software\Microsoft\Windows\CurrentVersion\Run",RunValue="YierBubu";
-    private static bool AutoStartEnabled{get{using var key=Registry.CurrentUser.OpenSubKey(RunKey);return key?.GetValue(RunValue) is string value&&value.Trim('"').Equals(Environment.ProcessPath,StringComparison.OrdinalIgnoreCase);}}
+    private static bool AutoStartRegistered{get{try{using var key=Registry.CurrentUser.OpenSubKey(RunKey);return key?.GetValue(RunValue) is string;}catch{return false;}}}
+    private static bool AutoStartEnabled{get{try{using var key=Registry.CurrentUser.OpenSubKey(RunKey);return key?.GetValue(RunValue) is string value&&value.Trim('"').Equals(Environment.ProcessPath,StringComparison.OrdinalIgnoreCase);}catch{return false;}}}
     private static void SetAutoStart(bool enabled)
     {
-        using var key=Registry.CurrentUser.CreateSubKey(RunKey);
-        if(enabled)key.SetValue(RunValue,$"\"{Environment.ProcessPath}\"");
-        else if(key.GetValue(RunValue)!=null)key.DeleteValue(RunValue);
+        try
+        {
+            using var key=Registry.CurrentUser.CreateSubKey(RunKey);
+            if(enabled)key.SetValue(RunValue,$"\"{Environment.ProcessPath}\"");
+            else if(key.GetValue(RunValue)!=null)key.DeleteValue(RunValue);
+        }
+        catch(ObjectDisposedException){}catch(IOException){}catch(UnauthorizedAccessException){}catch(System.Security.SecurityException){}
     }
-    public void Start()
+    public void Start(bool silent=false)
     {
-        window.Show();tray.Visible=true;input.Start();lastBlink=Now;heartbeat.Start();
+        if(silent){hidden=true;visibility.Text="显示小熊";}else window.Show();
+        tray.Visible=true;input.Start();lastBlink=Now;heartbeat.Start();
         SystemEvents.SessionSwitch+=SessionChanged;SystemEvents.PowerModeChanged+=PowerChanged;SystemEvents.DisplaySettingsChanged+=DisplayChanged;
-        if(!input.Listening)ShowStatus();
+        if(!input.Listening&&!silent)ShowStatus();
     }
     private void OnInput(InputEvent value)
     {
         if(value.Repeat)return;
         if(demo.Count>0){demo.Clear();state.Reset(Now);}
+        if(value.Kind==InputKind.KeyDown&&ScanCodes.IsTypingKey(value.Key))typingStats.Add(DateOnly.FromDateTime(DateTime.Now));
         state.Handle(value,Now);Animate();
     }
     private void Animate(){animationUntil=Now+0.3;if(!hidden&&sessionActive){view.SetInteraction(state.Snapshot(Now),Now);frames.Start();}}
@@ -68,6 +91,8 @@ public sealed class AppController:IDisposable
     }
     private void IdleTick()
     {
+        if(settingsDirty)CommitSettings();
+        typingStats.Flush();
         UpdateStatus();if(hidden||!sessionActive)return;
         double now=Now;var snapshot=state.Snapshot(now);
         if(snapshot.Resting!=lastResting){lastResting=snapshot.Resting;view.SetInteraction(snapshot,now);}
@@ -93,8 +118,13 @@ public sealed class AppController:IDisposable
             (4,new(InputKind.Scroll,Y:4)),(4.4,new(InputKind.Scroll,Y:-4)),(4.8,new(InputKind.Scroll,X:4)),(5.2,new(InputKind.Scroll,X:-4))];
         foreach(var action in sequence)demo.Enqueue((start+action.Delay,action.Event));frames.Start();
     }
-    private void ShowStatus(){if(status==null){status=new StatusWindow(()=>{input.Start();UpdateStatus();});status.Closed+=(_,_)=>status=null;}UpdateStatus();status.Show();status.Activate();}
-    private void UpdateStatus(){status?.Update(input.Status,input.Activity);}
+    private void ShowStatus(){if(status==null){status=new StatusWindow(window,()=>{input.Start();UpdateStatus();},CommitSettings);status.Closed+=(_,_)=>status=null;}UpdateStatus();status.Show();status.Activate();}
+    private void UpdateStatus(){status?.Update(input.Status,input.Activity,typingStats);}
+    private void CommitSettings()
+    {
+        settings.Scale=window.Scale;settings.ClickThrough=window.ClickThrough;
+        settings.Left=window.Left;settings.Top=window.Top;settings.Save();settingsDirty=false;
+    }
     private void Dispatch(Action action){if(!disposed)app.Dispatcher.BeginInvoke(()=>{if(!disposed)action();});}
     private void SessionChanged(object sender,SessionSwitchEventArgs e)
     {
@@ -111,5 +141,6 @@ public sealed class AppController:IDisposable
         SystemEvents.SessionSwitch-=SessionChanged;SystemEvents.PowerModeChanged-=PowerChanged;SystemEvents.DisplaySettingsChanged-=DisplayChanged;
         frames.Stop();heartbeat.Stop();blinkEnd.Stop();demo.Clear();input.Input-=OnInput;input.Reset-=ResetActions;input.Dispose();
         status?.Close();window.Close();tray.Visible=false;tray.ContextMenuStrip?.Dispose();tray.Dispose();icon.Dispose();
+        typingStats.Flush();CommitSettings();
     }
 }

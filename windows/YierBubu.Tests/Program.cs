@@ -6,12 +6,12 @@ void Check(bool condition, string message = "assertion failed") { if (!condition
 InputEvent Down(char key, bool repeat = false) => new(InputKind.KeyDown, Key: key, Repeat: repeat);
 InputEvent Up(char key) => new(InputKind.KeyUp, Key: key);
 
-Test("all 36 physical main keys map independently of text input", () => {
-    (ushort scan, char key)[] expected = [(0x02,'1'),(0x03,'2'),(0x04,'3'),(0x05,'4'),(0x06,'5'),(0x07,'6'),(0x08,'7'),(0x09,'8'),(0x0a,'9'),(0x0b,'0'),(0x10,'q'),(0x11,'w'),(0x12,'e'),(0x13,'r'),(0x14,'t'),(0x15,'y'),(0x16,'u'),(0x17,'i'),(0x18,'o'),(0x19,'p'),(0x1e,'a'),(0x1f,'s'),(0x20,'d'),(0x21,'f'),(0x22,'g'),(0x23,'h'),(0x24,'j'),(0x25,'k'),(0x26,'l'),(0x2c,'z'),(0x2d,'x'),(0x2e,'c'),(0x2f,'v'),(0x30,'b'),(0x31,'n'),(0x32,'m')];
+Test("all 38 physical main keys map independently of text input", () => {
+    (ushort scan, char key)[] expected = [(0x02,'1'),(0x03,'2'),(0x04,'3'),(0x05,'4'),(0x06,'5'),(0x07,'6'),(0x08,'7'),(0x09,'8'),(0x0a,'9'),(0x0b,'0'),(0x10,'q'),(0x11,'w'),(0x12,'e'),(0x13,'r'),(0x14,'t'),(0x15,'y'),(0x16,'u'),(0x17,'i'),(0x18,'o'),(0x19,'p'),(0x1e,'a'),(0x1f,'s'),(0x20,'d'),(0x21,'f'),(0x22,'g'),(0x23,'h'),(0x24,'j'),(0x25,'k'),(0x26,'l'),(0x2c,'z'),(0x2d,'x'),(0x2e,'c'),(0x2f,'v'),(0x30,'b'),(0x31,'n'),(0x32,'m'),(0x1c,'\r'),(0x39,' ')];
     foreach (var (scan,key) in expected) Check(ScanCodes.TryMap(scan,false,false,out var actual) && actual == key,$"scan {scan:x}");
 });
 Test("unknown extended media and numpad never impersonate main keys", () => {
-    foreach(ushort scan in new ushort[]{0,0x39,0x3b,0x47,0x48,0x52,0x56,0xff}) Check(!ScanCodes.TryMap(scan,false,false,out _));
+    foreach(ushort scan in new ushort[]{0,0x1d,0x3a,0x3b,0x47,0x48,0x52,0x56,0xff}) Check(!ScanCodes.TryMap(scan,false,false,out _));
     Check(!ScanCodes.TryMap(0x10,true,false,out _)); Check(!ScanCodes.TryMap(0x1e,false,true,out _));
 });
 Test("normalizer detects autorepeat and accepts a fresh press after release", () => {
@@ -58,8 +58,12 @@ Test("zero and nonfinite scroll never activate feedback", () => {
     var s=new InteractionState(0);s.Handle(new(InputKind.Scroll,Y:double.NaN),0);s.Handle(new(InputKind.Scroll,X:double.PositiveInfinity),0);s.Handle(new(InputKind.Scroll),0);
     var f=s.Snapshot(0);Check(f.ScrollX==0&&f.ScrollY==0);
 });
+Test("space and enter drive the right paw like letter keys", () => {
+    var s=new InteractionState(0);s.Handle(Down(' '),0);s.Handle(Down('\r'),0.01);
+    var f=s.Snapshot(0.02);Check(f.Keys.Contains(' ')&&f.Keys.Contains('\r')&&f.LeftKey==null&&f.RightKey=='\r');
+});
 Test("unknown key and orphan release cannot create action", () => {
-    var s=new InteractionState(0);s.Handle(Down(' '),0);s.Handle(Up('a'),0);Check(s.Snapshot(0).Keys.Count==0);
+    var s=new InteractionState(0);s.Handle(Down('\0'),0);s.Handle(Up('a'),0);Check(s.Snapshot(0).Keys.Count==0);
 });
 Test("rest begins after 15 seconds only when idle", () => {
     var s=new InteractionState(0);Check(!s.Snapshot(14.9).Resting);Check(s.Snapshot(15).Resting);
@@ -79,13 +83,33 @@ Test("counts exclude repeats releases and invalid scrolling", () => {
     a.Record(new(InputKind.MouseDown,Button:MouseButton.Middle));a.Record(new(InputKind.Scroll,Y:1));a.Record(new(InputKind.Scroll,Y:double.NaN));
     Check(a.KeyPresses==1&&a.RightClicks==1&&a.MiddleClicks==1&&a.LeftClicks==0&&a.ScrollEvents==1);
 });
+Test("typing stats persist daily totals and roll through weeks and months", () => {
+    var file=Path.Combine(Path.GetTempPath(),"yierbubu-stats-"+Guid.NewGuid().ToString("N")+".json");
+    try {
+        var stats=new TypingStats(file);
+        var today=new DateOnly(2026,10,26); // Monday
+        Check(TypingStats.WeekStart(today)==today&&TypingStats.MonthStart(today)==new DateOnly(2026,10,1));
+        Check(TypingStats.WeekStart(new DateOnly(2026,10,25))==new DateOnly(2026,10,19)); // Sunday rolls back to Monday
+        stats.Add(today);stats.Add(today,2);stats.Add(today,0);stats.Add(today.AddDays(-1));
+        stats.Add(new DateOnly(2026,10,19));stats.Add(new DateOnly(2026,9,30));stats.Add(new DateOnly(2026,8,15));
+        stats.Flush();
+        var reloaded=new TypingStats(file);
+        Check(reloaded.On(today)==3&&reloaded.Total==7);
+        Check(reloaded.Since(TypingStats.WeekStart(today))==3);
+        Check(reloaded.Since(TypingStats.MonthStart(today))==5);
+        reloaded.Prune(new DateOnly(2026,9,26));reloaded.Flush();
+        var pruned=new TypingStats(file);
+        Check(pruned.On(today)==3&&pruned.Total==6); // only the August day was dropped
+    } finally { try { File.Delete(file); } catch {} }
+});
 
 Test("all scene keys have unique labels and consistent paw halves", () => {
-    Check(SceneLayout.Keys.Count==36&&SceneLayout.Keys.Select(k=>k.Label).Distinct().Count()==36);
+    Check(SceneLayout.Keys.Count==38&&SceneLayout.Keys.Select(k=>k.Label).Distinct().Count()==38);
     Check(SceneLayout.Key('a')!.LeftPaw&&!SceneLayout.Key('j')!.LeftPaw);
-    Check(SceneLayout.Key(' ') is null);
+    Check(SceneLayout.Key(' ')!.Center.X==980&&SceneLayout.Key('\r')!.Center.X==1300);
+    Check(!SceneLayout.Key(' ')!.LeftPaw&&!SceneLayout.Key('\r')!.LeftPaw);
 });
-foreach(var label in "1234567890qwertyuiopasdfghjklzxcvbnm") {
+foreach(var label in "1234567890qwertyuiopasdfghjklzxcvbnm\r ") {
     char key=label;
     Test($"paw tip lands on key {key} top", () => {
         var k=SceneLayout.Key(key)!;var pose=PawPose.Typing(key)!;

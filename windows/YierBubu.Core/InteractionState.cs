@@ -18,7 +18,7 @@ public sealed class InteractionState
         Normalize(time);
         switch(input.Kind){
             case InputKind.KeyDown:
-                if(!ScanCodes.VisibleKeys.Contains(input.Key)||input.Key=='\0')return;
+                if(!ScanCodes.IsTypingKey(input.Key))return;
                 lastActivity=time;
                 if(input.Repeat||(keys.TryGetValue(input.Key,out var held)&&held.Held))return;
                 keys[input.Key]=new(true,time+0.1,++order);break;

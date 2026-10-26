@@ -8,10 +8,14 @@ public static class ScanCodes
 {
     public const string VisibleKeys="1234567890qwertyuiopasdfghjklzxcvbnm";
     public const string LeftKeys="12345qwertasdfgzxcvb";
+    public const string TypingKeys=VisibleKeys+"\r ";
+    public static bool IsTypingKey(char key)=>key!='\0'&&TypingKeys.Contains(key);
     public static bool TryMap(ushort code,bool e0,bool e1,out char key)
     {
         key='\0';if(e0||e1)return false;
         key=code switch {
+            0x1c => '\r',
+            0x39 => ' ',
             >=0x02 and <=0x0b => "1234567890"[code-0x02],
             >=0x10 and <=0x19 => "qwertyuiop"[code-0x10],
             >=0x1e and <=0x26 => "asdfghjkl"[code-0x1e],

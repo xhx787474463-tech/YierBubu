@@ -23,7 +23,11 @@ public static class SceneLayout
     private static KeyGeometry[] BuildKeys()
     {
         (string Labels,Point2 Origin,Point2 Step)[] rows=[("1234567890",new(632,655),new(72.5,22)),("qwertyuiop",new(597,693),new(77,22.7)),("asdfghjkl",new(575,731),new(80,24.3)),("zxcvbnm",new(600,782),new(86,26.5))];
-        return rows.SelectMany((row,r)=>row.Labels.Select((label,i)=>new KeyGeometry(label,new(row.Origin.X+i*row.Step.X,row.Origin.Y+i*row.Step.Y),new(32.5*(1+r*0.045),9.8*(1+r*0.045)),new(-17.5*(1+r*0.045),13.8*(1+r*0.045)),i<5))).ToArray();
+        var keys=rows.SelectMany((row,r)=>row.Labels.Select((label,i)=>new KeyGeometry(label,new(row.Origin.X+i*row.Step.X,row.Origin.Y+i*row.Step.Y),new(32.5*(1+r*0.045),9.8*(1+r*0.045)),new(-17.5*(1+r*0.045),13.8*(1+r*0.045)),i<5))).ToList();
+        // Space and Return live on the front-right corner of the illustrated keyboard, beyond the four letter rows.
+        keys.Add(new(' ',new(980,1000),new(140,28),new(-18,14),false));
+        keys.Add(new('\r',new(1300,950),new(32,10),new(-17,13.8),false));
+        return [..keys];
     }
     public static KeyGeometry? Key(char label)=>Keys.FirstOrDefault(k=>k.Label==label);
     public static Point2 MouseContact(MouseButton b)=>b switch{MouseButton.Left=>new(324,622),MouseButton.Right=>new(255,592),_=>new(280,601)};

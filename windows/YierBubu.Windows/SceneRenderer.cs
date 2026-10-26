@@ -70,7 +70,9 @@ public sealed class SceneRenderer
         var inset=corners.Select(p=>new Point2(top.X+(p.X-top.X)*0.88,top.Y+(p.Y-top.Y)*0.8)).ToArray();
         dc.DrawGeometry(null,Pen(Colors.White,2.5,0.58),Rounded(inset,13));
         dc.PushTransform(new TranslateTransform(top.X,top.Y));dc.PushTransform(new RotateTransform(Math.Atan2(key.Across.Y,key.Across.X)*180/Math.PI));
-        var text=new FormattedText(key.Label.ToString(),CultureInfo.InvariantCulture,FlowDirection.LeftToRight,new Typeface(new FontFamily("Arial Rounded MT Bold, Segoe UI"),FontStyles.Normal,FontWeights.Bold,FontStretches.Normal),27,Brush(Ink),1);
+        var caption=key.Label switch{' '=>"space",'\r'=>"enter",_=>key.Label.ToString()};
+        double fontSize=key.Label is ' ' or '\r'?18:27;
+        var text=new FormattedText(caption,CultureInfo.InvariantCulture,FlowDirection.LeftToRight,new Typeface(new FontFamily("Arial Rounded MT Bold, Segoe UI"),FontStyles.Normal,FontWeights.Bold,FontStretches.Normal),fontSize,Brush(Ink),1);
         dc.DrawText(text,new Point(-text.Width/2,-text.Height/2));dc.Pop();dc.Pop();
     }
     private static void DrawMouse(DrawingContext dc,InteractionSnapshot state)
