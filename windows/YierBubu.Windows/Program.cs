@@ -1,5 +1,6 @@
 using System.Threading;
 using System.Windows;
+// probe
 namespace YierBubu.Windows;
 
 public static class Program
